@@ -3,7 +3,6 @@ from datetime import datetime
 from telebot import TeleBot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 from pymax import MaxClient
-from pymax.payloads import UserAgentPayload
 
 BOT_TOKEN = "8659417974:AAE359LdyMebHRJToSUJi7QnkcXHD-A9xBI"
 ADMIN_ID = 626387429
@@ -39,11 +38,18 @@ def cancel_kb():
     m.add(KeyboardButton("❌ Отмена"))
     return m
 
-ua = UserAgentPayload(app_version="26.2.3", system_version="macOS 14.5",
-                       screen="1440x900", timezone="Europe/Moscow", locale="ru-RU")
+# Общие параметры для имитации устройства
+CLIENT_PARAMS = {
+    "device_type": "WEB",
+    "app_version": "26.2.3",
+    "system_version": "macOS 14.5",
+    "screen": "1440x900",
+    "timezone": "Europe/Moscow",
+    "locale": "ru-RU"
+}
 
 async def req_code(phone):
-    c = MaxClient(phone=phone, headers=ua)
+    c = MaxClient(phone=phone, **CLIENT_PARAMS)
     try:
         await c.start()
         return True, c, "Код отправлен"
@@ -63,7 +69,7 @@ async def conf_code(c, code):
         return False, None, None, str(e)
 
 async def login_tok(token):
-    c = MaxClient(token=token, headers=ua)
+    c = MaxClient(token=token, **CLIENT_PARAMS)
     try:
         await c.start()
         m = c.me
