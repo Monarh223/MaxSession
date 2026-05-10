@@ -61,7 +61,7 @@ async def max_request_code(phone):
         timezone="Europe/Moscow",
         locale="ru-RU"
     )
-    client = MaxClient(phone=phone, work_dir="cache", headers=ua)
+    client = MaxClient(phone=phone, headers=ua)
     try:
         await client.start()
         return True, client, "Код отправлен на номер"
@@ -96,7 +96,7 @@ async def max_login_by_token(token):
         timezone="Europe/Moscow",
         locale="ru-RU"
     )
-    client = MaxClient(token=token, work_dir="cache", headers=ua)
+    client = MaxClient(token=token, headers=ua)
     try:
         await client.start()
         me = client.me
@@ -129,27 +129,21 @@ def set_group(message):
     if message.from_user.id != ADMIN_ID:
         bot.reply_to(message, "⛔ Доступ запрещён.")
         return
-
-    # Если команда в группе (или супергруппе) — берём ID этого чата
     if message.chat.type in ['group', 'supergroup']:
         new_group_id = message.chat.id
         save_group_id(new_group_id)
         GROUP_CHAT_ID = new_group_id
         bot.reply_to(message, f"✅ Эта группа сохранена для отправки сессий.\nID: `{new_group_id}`", parse_mode="Markdown")
         return
-
-    # Если в личке — пробуем аргумент
     parts = message.text.strip().split()
     if len(parts) != 2:
         bot.reply_to(message, "ℹ️ В личке укажите ID: `/group -1001234567890`\nВ группе просто `/group`", parse_mode="Markdown")
         return
-
     try:
         new_group_id = int(parts[1])
     except ValueError:
         bot.reply_to(message, "❌ ID группы должен быть числом.")
         return
-
     save_group_id(new_group_id)
     GROUP_CHAT_ID = new_group_id
     bot.reply_to(message, f"✅ ID группы сохранён: `{new_group_id}`", parse_mode="Markdown")
@@ -305,7 +299,6 @@ def handle_message(message):
         return
 
 if __name__ == "__main__":
-    os.makedirs("cache", exist_ok=True)
     print("🤖 MAX Session Bot запущен...")
     print(f"Админ ID: {ADMIN_ID}")
     print(f"Группа: {GROUP_CHAT_ID if GROUP_CHAT_ID else 'не задана'}")
